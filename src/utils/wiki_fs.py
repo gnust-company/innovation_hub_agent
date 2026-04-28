@@ -1,5 +1,6 @@
 """Wiki filesystem utility — reads the local wiki vault."""
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -72,6 +73,25 @@ class WikiFilesystem:
                 return str(md_path.relative_to(self.root))
 
         return None
+
+    def extract_wikilinks(self, content: str) -> list[str]:
+        """Extract all [[WikiLinks]] from markdown content.
+
+        Handles:
+          - [[SimpleLink]]
+          - [[folder/NestedLink]]
+          - [[Link|Display Text]]  (returns only the link part)
+        Returns unique, ordered list of link targets.
+        """
+        raw = re.findall(r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]', content)
+        seen = set()
+        result = []
+        for link in raw:
+            link = link.strip()
+            if link and link not in seen:
+                seen.add(link)
+                result.append(link)
+        return result
 
     def build_file_index(self) -> dict[str, str]:
         """Build a mapping of note_name -> relative_path for fast lookup."""
