@@ -18,6 +18,8 @@ TESTS = [
     ("Test 3: Technical question", "API endpoint để tạo problem là gì?"),
     ("Test 4: Permission question", "Role admin và member khác gì nhau?"),
     ("Test 5: Multi-hop question", "Workflow của một problem từ lúc tạo đến khi solved?"),
+    ("Test 6: Deep link follow (2+ hops)", "Cách chấm điểm trong event? Chi tiết từng criteria?"),
+    ("Test 7: Cross-domain link follow", "Từ problem tạo room brainstorm, rồi room đó nộp idea vào event — chi tiết toàn bộ flow?"),
 ]
 
 

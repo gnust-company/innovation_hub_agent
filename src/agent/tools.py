@@ -35,9 +35,16 @@ def read_file(path: str) -> str:
     Args:
         path: Relative path to the file (e.g., '00_Index/AGENT_GUIDE.md')
     """
-    content = _get_wiki().read_file(path)
+    wiki = _get_wiki()
+    content = wiki.read_file(path)
     if content is None:
         return f"Error: File not found: {path}"
+
+    links = wiki.extract_wikilinks(content)
+    if links:
+        lines = [f"  → [[{l}]]" for l in links]
+        content += "\n\n---\n**Liên kết phát hiện trong file:**\n" + "\n".join(lines)
+
     return content
 
 
