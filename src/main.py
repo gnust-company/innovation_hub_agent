@@ -4,7 +4,7 @@ import os
 
 from dotenv import load_dotenv
 
-from src.agent.core import create_agent, run_query, stream_query
+from src.agent.core import create_agent, run_query
 from src.agent.config import AgentConfig
 
 
@@ -35,13 +35,11 @@ def main():
         result = output["result"]
         trace = output["trace"]
 
-        # Print the last AI message
         for msg in reversed(result["messages"]):
             if msg.type == "ai" and msg.content:
                 print(f"\nAgent: {msg.content}\n")
                 break
 
-        # Print trace summary
         print(f"  [tools: {trace.tools_called} | files: {len(trace.files_read)} | "
               f"time: {trace.duration_seconds:.1f}s]")
 

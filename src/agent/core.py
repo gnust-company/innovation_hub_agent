@@ -20,16 +20,13 @@ def create_agent(config: AgentConfig | None = None):
 
     setup_logging(os.getenv("LOG_LEVEL", "INFO"))
 
-    # Init wiki filesystem
     wiki_path = os.getenv("WIKI_PATH")
     if not wiki_path:
         raise ValueError("WIKI_PATH environment variable is not set")
     wiki = WikiFilesystem(wiki_path)
 
-    # Load system prompt with AGENT_GUIDE.md
     system_prompt = load_system_prompt(wiki)
 
-    # Setup LLM via NVIDIA NIM (OpenAI-compatible)
     api_key = os.getenv("NVIDIA_API_KEY")
     if not api_key:
         raise ValueError("NVIDIA_API_KEY is required. Get one at build.nvidia.com")
@@ -43,7 +40,6 @@ def create_agent(config: AgentConfig | None = None):
         max_retries=config.llm_max_retries,
     )
 
-    # Create ReAct agent
     agent = create_react_agent(
         model=llm,
         tools=TOOLS,
@@ -65,13 +61,11 @@ def run_query(agent, query: str, thread_id: str, config: AgentConfig) -> dict:
             },
         )
 
-        # Extract trace info from messages
         for msg in result["messages"]:
             if msg.type == "ai" and hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
                     trace.record_tool(tc["name"], tc.get("args", {}))
 
-        # Extract token usage from last AI message metadata
         for msg in reversed(result["messages"]):
             if msg.type == "ai":
                 meta = getattr(msg, "response_metadata", {})
@@ -85,15 +79,7 @@ def run_query(agent, query: str, thread_id: str, config: AgentConfig) -> dict:
 
 
 async def stream_query(agent, query: str, thread_id: str, config: AgentConfig):
-    """Stream agent execution with intermediate steps visible.
-
-    Yields dicts with event type and data:
-      - {"type": "thinking", "content": "..."}
-      - {"type": "tool_call", "name": "...", "args": {...}}
-      - {"type": "tool_result", "content": "..."}
-      - {"type": "answer", "content": "..."}
-      - {"type": "error", "content": "..."}
-    """
+    """Stream agent execution with intermediate steps visible."""
     with trace_run(query) as trace:
         try:
             async for event in agent.astream_events(
