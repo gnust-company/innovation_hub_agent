@@ -8,7 +8,7 @@ os.environ.setdefault('WIKI_PATH', '/home/aiteam-linux/gnust/innovation_hub_wiki
 from dotenv import load_dotenv
 load_dotenv('/home/aiteam-linux/gnust/innovation_hub_agent/.env')
 
-from src.agent.core import create_agent
+from src.agent.core import create_agent, run_query
 
 LOG_FILE = '/home/aiteam-linux/gnust/innovation_hub_agent/tests/e2e_report.md'
 
@@ -24,7 +24,7 @@ TESTS = [
 
 
 def run_tests():
-    agent = create_agent()
+    agent, config = create_agent()
 
     with open(LOG_FILE, 'w', encoding='utf-8') as f:
         f.write("# Innovation Hub Agent — E2E Test Report\n\n")
@@ -38,10 +38,11 @@ def run_tests():
             f.write(f"## {title}\n\n")
             f.write(f"**Question:** {question}\n\n")
 
-            result = agent.invoke(
-                {'messages': [{'role': 'user', 'content': question}]},
-                config={'configurable': {'thread_id': f'test-{title}'}, 'recursion_limit': 15},
+            output = run_query(
+                agent, question, f'test-{title}', config,
             )
+            result = output['result']
+            trace = output['trace']
 
             # Log all messages (tool calls, observations, etc.)
             f.write("### Agent Trace\n\n")
@@ -58,7 +59,7 @@ def run_tests():
                         f.write(f"**[AI — Tool Calls]**\n")
                         for tc in msg.tool_calls:
                             f.write(f"- `{tc['name']}({tc['args']})`\n")
-                            print(f"  [AI → {tc['name']}] {tc['args']}")
+                            print(f"  [AI -> {tc['name']}] {tc['args']}")
                         f.write("\n")
 
                         # Log thinking/reasoning if available
@@ -76,6 +77,15 @@ def run_tests():
                     content = msg.content[:500] if len(msg.content) > 500 else msg.content
                     f.write(f"**[Tool Result]**\n```\n{content}\n```\n\n")
                     print(f"  [TOOL RESULT] {content[:80]}...")
+
+            f.write(f"### Run Trace\n\n")
+            f.write(f"- Tools called: {trace.tools_called}\n")
+            f.write(f"- Files read: {trace.files_read}\n")
+            f.write(f"- Duration: {trace.duration_seconds:.2f}s\n")
+            f.write(f"- Token usage: {trace.token_usage}\n")
+            if trace.error:
+                f.write(f"- Error: {trace.error}\n")
+            f.write("\n")
 
             f.write("---\n\n")
             f.flush()
