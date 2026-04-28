@@ -1,10 +1,13 @@
 """Wiki tool definitions for the ReAct agent."""
 import os
+import logging
 from typing import Optional
 
 from langchain_core.tools import tool
 
 from src.utils.wiki_fs import WikiFilesystem
+
+logger = logging.getLogger("innovation_hub_agent")
 
 _wiki: Optional[WikiFilesystem] = None
 
@@ -15,7 +18,10 @@ def _get_wiki() -> WikiFilesystem:
         wiki_path = os.getenv("WIKI_PATH")
         if not wiki_path:
             raise ValueError("WIKI_PATH environment variable is not set")
-        _wiki = WikiFilesystem(wiki_path)
+        try:
+            _wiki = WikiFilesystem(wiki_path)
+        except ValueError as e:
+            raise ValueError(f"Wiki vault unavailable: {e}")
     return _wiki
 
 
@@ -35,10 +41,19 @@ def read_file(path: str) -> str:
     Args:
         path: Relative path to the file (e.g., '00_Index/AGENT_GUIDE.md')
     """
-    wiki = _get_wiki()
+    try:
+        wiki = _get_wiki()
+    except ValueError as e:
+        return f"Error: Wiki vault is unavailable. {e}"
+
     content = wiki.read_file(path)
     if content is None:
-        return f"Error: File not found: {path}"
+        filename = path.split("/")[-1].replace(".md", "")
+        return (
+            f"Error: File not found: {path}\n"
+            f"Tip: Try `search_wiki('{filename}')` to find the correct path, "
+            f"or `list_directory()` to browse available files."
+        )
 
     links = wiki.extract_wikilinks(content)
     if links:
@@ -55,9 +70,14 @@ def list_directory(path: str = "") -> str:
     Args:
         path: Relative directory path (e.g., '03_Events/'). Empty string lists root.
     """
-    entries = _get_wiki().list_directory(path)
+    try:
+        wiki = _get_wiki()
+    except ValueError as e:
+        return f"Error: Wiki vault is unavailable. {e}"
+
+    entries = wiki.list_directory(path)
     if not entries:
-        return f"Directory not found or empty: {path or '/'}"
+        return f"Directory not found or empty: {path or '/'}\nTip: Try `list_directory()` to see root contents."
     lines = []
     for e in entries:
         kind = "DIR " if e["type"] == "directory" else "FILE"
@@ -72,9 +92,17 @@ def search_wiki(query: str) -> str:
     Args:
         query: Search term to match against file paths and names.
     """
-    results = _get_wiki().search_files(query)
+    try:
+        wiki = _get_wiki()
+    except ValueError as e:
+        return f"Error: Wiki vault is unavailable. {e}"
+
+    results = wiki.search_files(query)
     if not results:
-        return f"No files found matching: {query}"
+        return (
+            f"No files found matching: {query}\n"
+            f"Tip: Try a different search term or `list_directory()` to browse."
+        )
     lines = [f"{r['path']}" for r in results]
     return "\n".join(lines)
 
@@ -86,7 +114,15 @@ def resolve_wikilink(link: str) -> str:
     Args:
         link: Wiki link to resolve (e.g., 'JWT_Flow' or '04_Authentication/JWT_Flow')
     """
-    resolved = _get_wiki().resolve_wikilink(link)
+    try:
+        wiki = _get_wiki()
+    except ValueError as e:
+        return f"Error: Wiki vault is unavailable. {e}"
+
+    resolved = wiki.resolve_wikilink(link)
     if resolved is None:
-        return f"Could not resolve wiki link: {link}"
+        return (
+            f"Could not resolve wiki link: {link}\n"
+            f"Tip: Try `search_wiki('{link}')` to find the correct file."
+        )
     return resolved
