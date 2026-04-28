@@ -6,7 +6,8 @@ from fastapi import APIRouter, Request
 from sse_starlette.sse import EventSourceResponse
 
 from src.agent.core import run_query, stream_query
-from src.api.schemas import ChatRequest, ChatResponse, StreamEvent
+from src.api.schemas import ChatRequest, ChatResponse
+from src.monitoring.langfuse import flush as flush_langfuse
 
 router = APIRouter()
 
@@ -18,17 +19,19 @@ async def chat(req: ChatRequest, request: Request):
 
     agent = request.app.state.agent
     config = request.app.state.config
+    user_meta = req.user_metadata.model_dump()
 
-    output = run_query(agent, req.message, thread_id, config)
+    output = run_query(agent, req.message, thread_id, config, user_metadata=user_meta)
     result = output["result"]
     trace = output["trace"]
 
-    # Extract final answer from last AI message
     answer = ""
     for msg in reversed(result["messages"]):
         if msg.type == "ai" and msg.content:
             answer = msg.content
             break
+
+    flush_langfuse()
 
     return ChatResponse(
         answer=answer,
@@ -44,12 +47,14 @@ async def chat_stream(req: ChatRequest, request: Request):
 
     agent = request.app.state.agent
     config = request.app.state.config
+    user_meta = req.user_metadata.model_dump()
 
     files_read: list[str] = []
 
     async def event_generator():
         try:
-            async for event in stream_query(agent, req.message, thread_id, config):
+            async for event in stream_query(agent, req.message, thread_id, config,
+                                            user_metadata=user_meta):
                 if event["type"] == "thinking":
                     yield {"data": json.dumps(
                         {"type": "token", "content": event["content"]},
@@ -75,7 +80,6 @@ async def chat_stream(req: ChatRequest, request: Request):
                         ensure_ascii=False,
                     )}
 
-            # Send sources at the end
             yield {"data": json.dumps(
                 {"type": "sources", "files": files_read},
                 ensure_ascii=False,
@@ -87,5 +91,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                 {"type": "error", "content": str(e)},
                 ensure_ascii=False,
             )}
+        finally:
+            flush_langfuse()
 
     return EventSourceResponse(event_generator())
