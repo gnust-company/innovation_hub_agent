@@ -23,11 +23,15 @@ def create_agent():
     # Load system prompt with AGENT_GUIDE.md
     system_prompt = load_system_prompt(wiki)
 
-    # Setup LLM
+    # Setup LLM via NVIDIA NIM (OpenAI-compatible)
+    api_key = os.getenv("NVIDIA_API_KEY")
+    if not api_key:
+        raise ValueError("NVIDIA_API_KEY is required. Get one at build.nvidia.com")
+
     llm = ChatOpenAI(
-        model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_BASE_URL") or None,
+        model=os.getenv("MODEL_NAME", "moonshotai/kimi-k2.5"),
+        api_key=api_key,
+        base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
         temperature=0,
     )
 
