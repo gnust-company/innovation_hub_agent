@@ -1,0 +1,1 @@
+"""Wiki tool definitions — placeholder."""
