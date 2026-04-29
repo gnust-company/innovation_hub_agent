@@ -11,6 +11,9 @@ logger = logging.getLogger("innovation_hub_agent")
 
 def setup_logging(level: str = "INFO"):
     """Configure structured logging."""
+    if logger.handlers:
+        logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+        return
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

@@ -5,9 +5,11 @@ import uuid
 from fastapi import APIRouter, Request
 from sse_starlette.sse import EventSourceResponse
 
+from langfuse import propagate_attributes
+
 from src.agent.core import run_query, stream_query
 from src.api.schemas import ChatRequest, ChatResponse
-from src.monitoring.langfuse import trace_agent_call
+from src.monitoring.langfuse import trace_agent_call, start_trace, end_trace
 
 router = APIRouter()
 
@@ -20,7 +22,6 @@ async def chat(req: ChatRequest, request: Request):
     config = request.app.state.config
 
     with trace_agent_call(
-        query=req.message,
         session_id=thread_id,
         user_id=req.user_metadata.username or None,
     ) as ctx:
@@ -37,9 +38,6 @@ async def chat(req: ChatRequest, request: Request):
                 answer = msg.content
                 break
 
-        if ctx.span:
-            ctx.span.update(output=answer)
-
     return ChatResponse(answer=answer, sources=trace.files_read, thread_id=thread_id)
 
 
@@ -50,35 +48,34 @@ async def chat_stream(req: ChatRequest, request: Request):
     agent = request.app.state.agent
     config = request.app.state.config
 
-    with trace_agent_call(
-        query=req.message,
-        session_id=thread_id,
-        user_id=req.user_metadata.username or None,
-    ) as ctx:
-
-        full_answer = ""
-
-        async def event_generator():
-            nonlocal full_answer
+    async def event_generator():
+        ctx = start_trace(
+            session_id=thread_id,
+            user_id=req.user_metadata.username or None,
+        )
+        with propagate_attributes(
+            user_id=ctx.user_id,
+            session_id=ctx.session_id,
+            trace_name="agent_query",
+        ):
             try:
                 async for event in stream_query(
                     agent, req.message, thread_id, config,
                     handler=ctx.handler, user_id=req.user_metadata.username or "",
                 ):
                     if event["type"] == "thinking":
-                        full_answer += event.get("content", "")
                         yield {"data": json.dumps(
                             {"type": "token", "content": event["content"]},
                             ensure_ascii=False,
                         )}
                     elif event["type"] == "tool_call":
                         yield {"data": json.dumps(
-                            {"type": "tool_call", "name": event.get("name", "")},
+                            {"type": "tool_call", "name": event.get("name", ""), "args": event.get("args", {}), "run_id": event.get("run_id", "")},
                             ensure_ascii=False,
                         )}
                     elif event["type"] == "tool_result":
                         yield {"data": json.dumps(
-                            {"type": "tool_result", "content": event["content"]},
+                            {"type": "tool_result", "content": event["content"], "run_id": event.get("run_id", "")},
                             ensure_ascii=False,
                         )}
                     elif event["type"] == "error":
@@ -96,7 +93,6 @@ async def chat_stream(req: ChatRequest, request: Request):
                     ensure_ascii=False,
                 )}
             finally:
-                if ctx.span:
-                    ctx.span.update(output=full_answer)
+                end_trace(ctx)
 
     return EventSourceResponse(event_generator())

@@ -1,9 +1,9 @@
-"""LangFuse monitoring — CallbackHandler + trace wrapper for LangGraph."""
+"""LangFuse v4 monitoring — CallbackHandler + propagate_attributes."""
 import os
 from contextlib import contextmanager
 from typing import Optional
 
-from langfuse import Langfuse
+from langfuse import get_client, propagate_attributes
 from langfuse.langchain import CallbackHandler
 
 from src.utils.logger import logger
@@ -15,48 +15,63 @@ def _is_configured() -> bool:
 
 @contextmanager
 def trace_agent_call(
-    query: str,
     session_id: Optional[str] = None,
     user_id: Optional[str] = None,
 ):
-    """Wrap agent call in Langfuse observation for correct trace-level user/session/name.
-
-    Yields handler to pass into agent.invoke config={"callbacks": [ctx.handler]}.
-    Set output on ctx.span before exiting.
-    """
+    """Create CallbackHandler for non-streaming calls. propagate_attributes sets trace-level user/session."""
     if not _is_configured():
         yield _NoopContext()
         return
 
-    client = Langfuse()
     handler = CallbackHandler()
+    with propagate_attributes(
+        user_id=user_id or "",
+        session_id=session_id or "",
+        trace_name="agent_query",
+    ):
+        yield _TraceContext(handler=handler)
 
-    with client.start_as_current_observation(
-        as_type="span",
-        name="agent_query",
-        trace_context={
-            "trace_id": client.create_trace_id(),
-            "user_id": user_id or "",
-            "session_id": session_id or "",
-        },
-    ) as span:
-        span.update(input=query)
-        yield _TraceContext(handler=handler, span=span)
+    get_client().flush()
 
-    client.flush()
+
+def start_trace(
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+):
+    """Create CallbackHandler for async streaming. propagate_attributes handles trace attrs."""
+    if not _is_configured():
+        return _NoopContext()
+    handler = CallbackHandler()
+    return _TraceContext(
+        handler=handler,
+        user_id=user_id or "",
+        session_id=session_id or "",
+    )
+
+
+def end_trace(ctx):
+    """Flush Langfuse after streaming completes."""
+    if not ctx or not ctx.handler:
+        return
+    try:
+        get_client().flush()
+    except Exception as e:
+        logger.warning(f"Failed to flush Langfuse: {e}")
 
 
 class _TraceContext:
-    __slots__ = ("handler", "span")
+    __slots__ = ("handler", "user_id", "session_id")
 
-    def __init__(self, handler, span):
+    def __init__(self, handler, user_id="", session_id=""):
         self.handler = handler
-        self.span = span
+        self.user_id = user_id
+        self.session_id = session_id
 
 
 class _NoopContext:
     handler = None
-    span = None
+    user_id = ""
+    session_id = ""
 
     def __getattr__(self, _):
         return None
