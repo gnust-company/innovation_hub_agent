@@ -112,15 +112,15 @@ async def stream_query(agent, query: str, thread_id: str, config: AgentConfig,
                         yield {"type": "thinking", "content": chunk.content}
 
                 elif kind == "on_tool_start":
-                    name = data.get("name", "")
+                    name = event.get("name", "")
                     inp = data.get("input", {})
                     trace.record_tool(name, inp)
-                    yield {"type": "tool_call", "name": name, "args": inp}
+                    yield {"type": "tool_call", "name": name, "args": inp, "run_id": event.get("run_id", "")}
 
                 elif kind == "on_tool_end":
                     output = data.get("output", {})
                     content = output.content if hasattr(output, "content") else str(output)
-                    yield {"type": "tool_result", "content": content[:500]}
+                    yield {"type": "tool_result", "content": content, "run_id": event.get("run_id", "")}
 
         except Exception as e:
             logger.error(f"Stream error: {e}")
