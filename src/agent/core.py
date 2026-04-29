@@ -9,8 +9,7 @@ from src.agent.config import AgentConfig
 from src.agent.prompts import load_system_prompt
 from src.agent.tools import read_file, list_directory, search_wiki, resolve_wikilink
 from src.utils.wiki_fs import WikiFilesystem
-from src.utils.logger import logger, setup_logging, trace_run, RunTrace
-from src.monitoring.langfuse import AgentTrace
+from src.utils.logger import logger, setup_logging, trace_run
 
 TOOLS = [read_file, list_directory, search_wiki, resolve_wikilink]
 
@@ -51,76 +50,57 @@ def create_agent(config: AgentConfig | None = None):
     return agent, config
 
 
-def run_query(agent, query: str, thread_id: str, config: AgentConfig,
-              user_metadata: dict | None = None) -> dict:
-    """Run a single query with safety limits, structured logging, and Langfuse tracking."""
-    meta = user_metadata or {}
-    lf_trace = AgentTrace(
-        query=query,
-        thread_id=thread_id,
-        user_id=meta.get("user_id", ""),
-        username=meta.get("username", ""),
-        role=meta.get("role", ""),
-    )
+def _build_config(thread_id: str, config: AgentConfig, handler=None,
+                  user_id: str = "", session_id: str = "") -> dict:
+    """Build LangGraph invoke config with optional Langfuse tracing."""
+    cfg = {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": config.max_tool_calls,
+    }
+    if handler:
+        cfg["callbacks"] = [handler]
+        cfg["run_name"] = "agent_query"
+        cfg["metadata"] = {
+            "langfuse_session_id": session_id or thread_id,
+            "langfuse_user_id": user_id or "",
+        }
+    return cfg
 
+
+def run_query(agent, query: str, thread_id: str, config: AgentConfig,
+              handler=None, user_id: str = "") -> dict:
+    """Run a single query with safety limits and structured logging."""
     with trace_run(query) as trace:
         result = agent.invoke(
             {"messages": [{"role": "user", "content": query}]},
-            config={
-                "configurable": {"thread_id": thread_id},
-                "recursion_limit": config.max_tool_calls,
-            },
+            config=_build_config(thread_id, config, handler, user_id, thread_id),
         )
 
         for msg in result["messages"]:
             if msg.type == "ai" and hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
                     trace.record_tool(tc["name"], tc.get("args", {}))
-                    lf_trace.on_tool_start(tc["name"], tc.get("args", {}))
-                    lf_trace.on_tool_end(str(tc.get("args", {})))
 
-        token_meta = {}
         for msg in reversed(result["messages"]):
             if msg.type == "ai":
-                meta_data = getattr(msg, "response_metadata", {})
-                if meta_data:
-                    token_meta = meta_data.get("token_usage", {})
+                meta = getattr(msg, "response_metadata", {})
+                if meta:
+                    token_meta = meta.get("token_usage", {})
                     if token_meta:
                         trace.token_usage = token_meta
                 break
-
-    # Extract final answer
-    answer = ""
-    for msg in reversed(result["messages"]):
-        if msg.type == "ai" and msg.content:
-            answer = msg.content
-            break
-
-    lf_trace.on_complete(answer, trace.files_read, token_meta or None)
 
     return {"result": result, "trace": trace}
 
 
 async def stream_query(agent, query: str, thread_id: str, config: AgentConfig,
-                       user_metadata: dict | None = None):
-    """Stream agent execution with intermediate steps visible and Langfuse tracking."""
-    meta = user_metadata or {}
-    lf_trace = AgentTrace(
-        query=query,
-        thread_id=thread_id,
-        user_id=meta.get("user_id", ""),
-        username=meta.get("username", ""),
-        role=meta.get("role", ""),
-    )
-
+                       handler=None, user_id: str = ""):
+    """Stream agent execution with intermediate steps visible."""
     with trace_run(query) as trace:
         try:
             async for event in agent.astream_events(
                 {"messages": [{"role": "user", "content": query}]},
-                config={
-                    "configurable": {"thread_id": thread_id},
-                    "recursion_limit": config.max_tool_calls,
-                },
+                config=_build_config(thread_id, config, handler, user_id, thread_id),
                 version="v2",
             ):
                 kind = event.get("event")
@@ -129,25 +109,19 @@ async def stream_query(agent, query: str, thread_id: str, config: AgentConfig,
                 if kind == "on_chat_model_stream":
                     chunk = data.get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:
-                        lf_trace.on_thinking_chunk(chunk.content)
                         yield {"type": "thinking", "content": chunk.content}
 
                 elif kind == "on_tool_start":
                     name = data.get("name", "")
                     inp = data.get("input", {})
                     trace.record_tool(name, inp)
-                    lf_trace.on_tool_start(name, inp)
                     yield {"type": "tool_call", "name": name, "args": inp}
 
                 elif kind == "on_tool_end":
                     output = data.get("output", {})
                     content = output.content if hasattr(output, "content") else str(output)
-                    lf_trace.on_tool_end(content[:2000])
                     yield {"type": "tool_result", "content": content[:500]}
-
-            lf_trace.on_complete("", trace.files_read)
 
         except Exception as e:
             logger.error(f"Stream error: {e}")
-            lf_trace.on_error(str(e))
             yield {"type": "error", "content": str(e)}
