@@ -45,17 +45,45 @@ cp .env.example .env
 
 # 6. Chạy CLI
 python -m src.main
+
+# Hoặc chạy API server
+uvicorn src.api.app:app --reload
 ```
 
-## Testing
+## Giao diện
+
+### CLI
 
 ```bash
-# Unit tests (không cần API key)
-pytest tests/test_wiki_fs.py tests/test_tools.py -v
-
-# E2E tests (cần NVIDIA_API_KEY)
-PYTHONPATH=. python tests/e2e_test.py
+python -m src.main
 ```
+
+Interactive terminal chat, hiển thị trace summary sau mỗi câu hỏi.
+
+### REST API + Frontend UI
+
+```bash
+uvicorn src.api.app:app --reload
+```
+
+- Frontend UI: `http://localhost:8000/`
+- API docs (Swagger): `http://localhost:8000/docs`
+
+#### API Endpoints
+
+| Method | Path | Mô tả |
+|--------|------|--------|
+| `POST` | `/api/chat` | Non-streaming — trả về full answer + sources |
+| `POST` | `/api/chat/stream` | Streaming via Server-Sent Events (SSE) |
+| `GET` | `/health` | Health check (model, wiki_path, status) |
+
+#### Streaming Events
+
+SSE stream phát các event type: `token`, `tool_call`, `tool_result`, `sources`, `done`, `error`.
+
+## Monitoring
+
+Tích hợp LangFuse v4 để theo dõi agent traces, user sessions, và tool usage. Cấu hình qua environment variables (`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`). Optional — agent chạy bình thường nếu không cấu hình.
 
 ## Cấu trúc project
 
@@ -66,6 +94,15 @@ src/
 │   ├── core.py           # create_agent(), run_query(), stream_query()
 │   ├── tools.py          # Wiki tool definitions + error handling
 │   └── prompts.py        # System prompt loader
+├── api/
+│   ├── app.py            # FastAPI app — CORS, lifespan, static files
+│   ├── routes/
+│   │   └── chat.py       # /api/chat + /api/chat/stream endpoints
+│   ├── schemas.py        # Pydantic models (ChatRequest, ChatResponse, ...)
+│   └── static/
+│       └── index.html    # Frontend UI với streaming visualization
+├── monitoring/
+│   └── langfuse.py       # LangFuse v4 — CallbackHandler + trace management
 ├── utils/
 │   ├── wiki_fs.py        # WikiFilesystem — local .md file operations
 │   └── logger.py         # Structured logging with RunTrace
@@ -90,16 +127,31 @@ tests/
 | `MAX_TOKENS` | Giới hạn tokens/response | `4096` |
 | `LLM_MAX_RETRIES` | Số lần retry khi LLM lỗi | `3` |
 | `TEMPERATURE` | LLM temperature | `0.0` |
+| `TOOL_TIMEOUT_SECONDS` | Timeout cho mỗi tool call | `30` |
 | `LOG_LEVEL` | Logging level | `INFO` |
+| `LANGFUSE_PUBLIC_KEY` | LangFuse public key (optional) | — |
+| `LANGFUSE_SECRET_KEY` | LangFuse secret key (optional) | — |
+| `LANGFUSE_HOST` | LangFuse host URL | — |
+
+## Testing
+
+```bash
+# Unit tests (không cần API key)
+pytest tests/test_wiki_fs.py tests/test_tools.py -v
+
+# E2E tests (cần NVIDIA_API_KEY)
+PYTHONPATH=. python tests/e2e_test.py
+```
 
 ## Safety & Limits
 
 - **Max tool calls**: Mặc định 10, configurable qua `MAX_TOOL_CALLS`
 - **Max tokens**: Mặc định 4096, configurable qua `MAX_TOKENS`
+- **Tool timeout**: Mặc định 30s, configurable qua `TOOL_TIMEOUT_SECONDS`
 - **Link depth**: Tối đa 3 mức từ file gốc
 - **Error handling**: Mỗi tool có graceful fallback — suggest search/list khi không tìm thấy
 
-## Streaming
+## Streaming API Usage
 
 ```python
 from src.agent.core import create_agent, stream_query
@@ -108,5 +160,3 @@ agent, config = create_agent()
 async for event in stream_query(agent, "query", "thread-1", config):
     print(event)  # {"type": "thinking"| "tool_call" | "tool_result" | "answer" | "error"}
 ```
-
-Sẵn sàng cho SSE integration (Issue #9).
