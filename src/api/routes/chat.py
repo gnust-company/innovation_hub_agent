@@ -14,12 +14,18 @@ from src.monitoring.langfuse import trace_agent_call, start_trace, end_trace
 router = APIRouter()
 
 
+def _parse_messages(req: ChatRequest) -> list[dict]:
+    """Convert ChatRequest.messages (Pydantic) to list[dict] for core."""
+    return [{"role": m.role, "content": m.content} for m in req.messages]
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, request: Request):
     """Non-streaming chat — returns full answer with sources."""
     thread_id = req.thread_id or str(uuid.uuid4())
     agent = request.app.state.agent
     config = request.app.state.config
+    messages = _parse_messages(req)
 
     with trace_agent_call(
         session_id=thread_id,
@@ -27,6 +33,7 @@ async def chat(req: ChatRequest, request: Request):
     ) as ctx:
         output = run_query(
             agent, req.message, thread_id, config,
+            messages=messages,
             handler=ctx.handler, user_id=req.user_metadata.username or "",
         )
         result = output["result"]
@@ -47,6 +54,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     thread_id = req.thread_id or str(uuid.uuid4())
     agent = request.app.state.agent
     config = request.app.state.config
+    messages = _parse_messages(req)
 
     async def event_generator():
         ctx = start_trace(
@@ -61,6 +69,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             try:
                 async for event in stream_query(
                     agent, req.message, thread_id, config,
+                    messages=messages,
                     handler=ctx.handler, user_id=req.user_metadata.username or "",
                 ):
                     if event["type"] == "thinking":
@@ -70,12 +79,19 @@ async def chat_stream(req: ChatRequest, request: Request):
                         )}
                     elif event["type"] == "tool_call":
                         yield {"data": json.dumps(
-                            {"type": "tool_call", "name": event.get("name", ""), "args": event.get("args", {}), "run_id": event.get("run_id", "")},
+                            {"type": "tool_call", "name": event.get("name", ""),
+                             "args": event.get("args", {}), "run_id": event.get("run_id", "")},
                             ensure_ascii=False,
                         )}
                     elif event["type"] == "tool_result":
                         yield {"data": json.dumps(
-                            {"type": "tool_result", "content": event["content"], "run_id": event.get("run_id", "")},
+                            {"type": "tool_result", "content": event["content"],
+                             "run_id": event.get("run_id", "")},
+                            ensure_ascii=False,
+                        )}
+                    elif event["type"] == "sources":
+                        yield {"data": json.dumps(
+                            {"type": "sources", "files": event["files"]},
                             ensure_ascii=False,
                         )}
                     elif event["type"] == "error":
@@ -84,7 +100,6 @@ async def chat_stream(req: ChatRequest, request: Request):
                             ensure_ascii=False,
                         )}
 
-                yield {"data": json.dumps({"type": "sources", "files": []}, ensure_ascii=False)}
                 yield {"data": json.dumps({"type": "done"}, ensure_ascii=False)}
 
             except Exception as e:

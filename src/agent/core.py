@@ -1,5 +1,6 @@
-"""Core ReAct agent setup using LangGraph."""
+"""Core ReAct agent setup using LangGraph — stateless, gateway-ready."""
 import os
+import uuid
 
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
@@ -40,6 +41,8 @@ def create_agent(config: AgentConfig | None = None):
         max_retries=config.llm_max_retries,
     )
 
+    # MemorySaver is for INTRA-REQUEST reasoning only (tool calling loops).
+    # It is NOT used for cross-request persistence — Hub BE owns all history.
     agent = create_react_agent(
         model=llm,
         tools=TOOLS,
@@ -50,9 +53,37 @@ def create_agent(config: AgentConfig | None = None):
     return agent, config
 
 
-def _build_config(thread_id: str, config: AgentConfig, handler=None,
-                  user_id: str = "", session_id: str = "") -> dict:
-    """Build LangGraph invoke config with optional Langfuse tracing."""
+def _build_langgraph_messages(
+    message: str,
+    messages: list[dict],
+) -> list[dict]:
+    """Build LangGraph input from request.
+
+    If messages[] is provided → use as full conversation history.
+    If messages[] is empty → fallback to single-turn with message field.
+    """
+    if messages:
+        return [{"role": m["role"], "content": m["content"]} for m in messages]
+
+    if message:
+        logger.warning("Using deprecated 'message' field — switch to 'messages[]'")
+        return [{"role": "user", "content": message}]
+
+    raise ValueError("Either 'messages' or 'message' must be provided")
+
+
+def _build_config(
+    thread_id: str,
+    config: AgentConfig,
+    handler=None,
+    user_id: str = "",
+    session_id: str = "",
+) -> dict:
+    """Build LangGraph invoke config.
+
+    Uses a unique thread_id per request so MemorySaver never loads stale state
+    from a previous request. The Hub BE's thread_id is passed to Langfuse only.
+    """
     cfg = {
         "configurable": {"thread_id": thread_id},
         "recursion_limit": config.max_tool_calls,
@@ -67,13 +98,24 @@ def _build_config(thread_id: str, config: AgentConfig, handler=None,
     return cfg
 
 
-def run_query(agent, query: str, thread_id: str, config: AgentConfig,
-              handler=None, user_id: str = "") -> dict:
+def run_query(
+    agent,
+    message: str,
+    thread_id: str,
+    config: AgentConfig,
+    messages: list[dict] | None = None,
+    handler=None,
+    user_id: str = "",
+) -> dict:
     """Run a single query with safety limits and structured logging."""
-    with trace_run(query) as trace:
+    langgraph_msgs = _build_langgraph_messages(message, messages or [])
+    # Unique thread_id per request — prevents MemorySaver state leakage
+    internal_tid = str(uuid.uuid4())
+
+    with trace_run(langgraph_msgs[-1]["content"] if langgraph_msgs else "") as trace:
         result = agent.invoke(
-            {"messages": [{"role": "user", "content": query}]},
-            config=_build_config(thread_id, config, handler, user_id, thread_id),
+            {"messages": langgraph_msgs},
+            config=_build_config(internal_tid, config, handler, user_id, thread_id),
         )
 
         for msg in result["messages"]:
@@ -93,14 +135,28 @@ def run_query(agent, query: str, thread_id: str, config: AgentConfig,
     return {"result": result, "trace": trace}
 
 
-async def stream_query(agent, query: str, thread_id: str, config: AgentConfig,
-                       handler=None, user_id: str = ""):
-    """Stream agent execution with intermediate steps visible."""
-    with trace_run(query) as trace:
+async def stream_query(
+    agent,
+    message: str,
+    thread_id: str,
+    config: AgentConfig,
+    messages: list[dict] | None = None,
+    handler=None,
+    user_id: str = "",
+):
+    """Stream agent execution with intermediate steps visible.
+
+    Yields events: thinking, tool_call, tool_result, sources, error.
+    The 'sources' event contains actual wiki files read during execution.
+    """
+    langgraph_msgs = _build_langgraph_messages(message, messages or [])
+    internal_tid = str(uuid.uuid4())
+
+    with trace_run(langgraph_msgs[-1]["content"] if langgraph_msgs else "") as trace:
         try:
             async for event in agent.astream_events(
-                {"messages": [{"role": "user", "content": query}]},
-                config=_build_config(thread_id, config, handler, user_id, thread_id),
+                {"messages": langgraph_msgs},
+                config=_build_config(internal_tid, config, handler, user_id, thread_id),
                 version="v2",
             ):
                 kind = event.get("event")
@@ -121,6 +177,9 @@ async def stream_query(agent, query: str, thread_id: str, config: AgentConfig,
                     output = data.get("output", {})
                     content = output.content if hasattr(output, "content") else str(output)
                     yield {"type": "tool_result", "content": content, "run_id": event.get("run_id", "")}
+
+            # Emit actual sources from files read during execution
+            yield {"type": "sources", "files": trace.files_read}
 
         except Exception as e:
             logger.error(f"Stream error: {e}")
