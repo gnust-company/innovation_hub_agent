@@ -88,16 +88,34 @@ Tích hợp LangFuse v4 để theo dõi agent traces, user sessions, và tool us
 
 ## Deployment (Docker)
 
-Agent BE chạy như một Docker service riêng biệt, kết nối với Hub BE qua shared Docker network.
+Agent BE chạy như một Docker service riêng biệt.
+
+### Standalone
 
 ```bash
 # Từ innovation_hub_agent/
 docker-compose up -d
 ```
 
-Agent BE mount wiki vault read-only từ host. Hub BE gọi Agent BE qua `http://agent-be:8000` trên shared Docker network `innovation_hub_network`.
+### Kết nối với Hub BE
 
-Lưu ý: Hub BE cần cấu hình `AGENT_BASE_URL=http://agent-be:8000` trong `.env` để gọi đúng service name.
+Để Hub BE gọi được Agent BE, cả hai phải cùng Docker network. Thêm network `innovation_hub_network` vào Hub BE's docker-compose:
+
+```yaml
+# Trong innovation_hub/docker-compose.yml, thêm agent-be service:
+  agent-be:
+    # ... (xem AGENTS.md để biết chi tiết)
+    networks:
+      - innovation_hub_network
+    # Không cần expose port — Hub BE gọi qua internal network
+```
+
+Hoặc join network thủ công:
+```bash
+docker network connect innovation_hub_network innovation_hub_api
+```
+
+Lưu ý: Hub BE cần cấu hình `AGENT_BASE_URL=http://agent-be:8000` trong `.env`.
 
 ### Healthcheck
 
