@@ -99,6 +99,7 @@
 </div>
 
 <div class="config-bar">
+  <label>API Key: <input type="password" id="apiKey" placeholder="sk-agent-..."></label>
   <label>Thread ID: <input type="text" id="threadId" class="thread" placeholder="auto-generated"></label>
   <label>Username: <input type="text" id="username" value="test_user"></label>
   <label>Role: <input type="text" id="role" value="user"></label>
@@ -120,6 +121,7 @@ const statusEl = document.getElementById('status');
 const threadInput = document.getElementById('threadId');
 const usernameInput = document.getElementById('username');
 const roleInput = document.getElementById('role');
+const apiKeyInput = document.getElementById('apiKey');
 
 msgInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
 
@@ -241,7 +243,10 @@ async function sendMessage() {
   try {
     const resp = await fetch('/api/chat/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': apiKeyInput.value,
+      },
       body: JSON.stringify(body),
     });
 

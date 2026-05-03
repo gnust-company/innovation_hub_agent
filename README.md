@@ -71,11 +71,12 @@ uvicorn src.api.app:app --reload
 
 #### API Endpoints
 
-| Method | Path | Mô tả |
-|--------|------|--------|
-| `POST` | `/api/chat` | Non-streaming — trả về full answer + sources |
-| `POST` | `/api/chat/stream` | Streaming via Server-Sent Events (SSE) |
-| `GET` | `/health` | Health check (model, wiki_path, status) |
+| Method | Path | Auth | Mô tả |
+|--------|------|------|--------|
+| `POST` | `/api/chat` | API Key | Non-streaming — trả về full answer + sources |
+| `POST` | `/api/chat/stream` | API Key | Streaming via Server-Sent Events (SSE) |
+| `GET` | `/health` | None | Health check (model, wiki_path, version, status) |
+| `GET` | `/ready` | None | Readiness check (agent initialized, wiki accessible) |
 
 #### Streaming Events
 
@@ -84,6 +85,34 @@ SSE stream phát các event type: `token`, `tool_call`, `tool_result`, `sources`
 ## Monitoring
 
 Tích hợp LangFuse v4 để theo dõi agent traces, user sessions, và tool usage. Cấu hình qua environment variables (`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`). Optional — agent chạy bình thường nếu không cấu hình.
+
+## Deployment (Docker)
+
+Agent BE chạy như một Docker service riêng biệt, kết nối với Hub BE qua shared Docker network.
+
+```bash
+# Từ innovation_hub_agent/
+docker-compose up -d
+```
+
+Agent BE mount wiki vault read-only từ host. Hub BE gọi Agent BE qua `http://agent-be:8000` trên shared Docker network `innovation_hub_network`.
+
+Lưu ý: Hub BE cần cấu hình `AGENT_BASE_URL=http://agent-be:8000` trong `.env` để gọi đúng service name.
+
+### Healthcheck
+
+Docker healthcheck tự động kiểm tra `/health` mỗi 30 giây. Kiểm tra trạng thái:
+
+```bash
+docker inspect --format='{{.State.Health.Status}}' innovation_hub_agent
+```
+
+## Security
+
+- **API Key**: `X-API-Key` header bắt buộc trên mọi `/api/*` endpoint. Service **từ chối khởi động** nếu `AGENT_API_KEY` không được cấu hình.
+- **CORS**: Mặc định tắt (internal service). Bật qua `AGENT_CORS_ORIGINS` nếu cần.
+- **Security headers**: Tự động thêm `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection` trên mọi response.
+- **API Docs**: `/docs` và `/redoc` tự động tắt khi `AGENT_ENV=production`.
 
 ## Cấu trúc project
 
@@ -108,11 +137,9 @@ src/
 │   └── logger.py         # Structured logging with RunTrace
 └── main.py               # CLI entry point
 tests/
-├── conftest.py           # Shared fixtures (tmp_wiki)
-├── test_wiki_fs.py       # WikiFilesystem unit tests
-├── test_tools.py         # Tool unit tests
-├── test_agent.py         # Integration tests (needs API key)
-└── e2e_test.py           # End-to-end test suite
+├── conftest.py           # Shared fixtures (tmp_wiki, app_client, auth_headers)
+├── test_auth.py          # Auth middleware tests
+└── test_health.py        # Health & readiness endpoint tests
 ```
 
 ## Environment Variables
@@ -121,6 +148,8 @@ tests/
 |----------|--------|---------|
 | `NVIDIA_API_KEY` | API key cho NVIDIA NIM | — |
 | `WIKI_PATH` | Đường dẫn tuyệt đối đến wiki vault | — |
+| `AGENT_API_KEY` | API key cho Hub BE auth (bắt buộc) | — |
+| `AGENT_ENV` | Environment (`development` \| `production`) | `development` |
 | `MODEL_NAME` | Tên model | `moonshotai/kimi-k2.5` |
 | `NVIDIA_BASE_URL` | API endpoint | `https://integrate.api.nvidia.com/v1` |
 | `MAX_TOOL_CALLS` | Giới hạn tool calls/query | `10` |
@@ -132,15 +161,14 @@ tests/
 | `LANGFUSE_PUBLIC_KEY` | LangFuse public key (optional) | — |
 | `LANGFUSE_SECRET_KEY` | LangFuse secret key (optional) | — |
 | `LANGFUSE_HOST` | LangFuse host URL | — |
+| `AGENT_CORS_ORIGINS` | CORS origins, comma-separated (optional) | — |
+| `AGENT_ALLOWED_IPS` | IP allowlist, comma-separated (optional) | — |
 
 ## Testing
 
 ```bash
-# Unit tests (không cần API key)
-pytest tests/test_wiki_fs.py tests/test_tools.py -v
-
-# E2E tests (cần NVIDIA_API_KEY)
-PYTHONPATH=. python tests/e2e_test.py
+# Unit tests (không cần API key hay NVIDIA key)
+PYTHONPATH=. pytest tests/ -v
 ```
 
 ## Safety & Limits
