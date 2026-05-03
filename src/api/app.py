@@ -3,13 +3,14 @@ import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.agent.core import create_agent
 from src.agent.config import AgentConfig
+from src.api.deps import verify_api_key, check_ip_allowlist
 from src.api.routes.chat import router as chat_router
 from src.api.schemas import HealthResponse
 from src.utils.logger import logger, setup_logging
@@ -31,20 +32,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Innovation Hub Agent",
-    version="0.1.0",
-    description="AI Agent đọc Wiki vault và trả lời câu hỏi",
+    version="0.2.0",
+    description="Stateless AI Agent — gateway-ready for Hub BE",
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS: only if AGENT_CORS_ORIGINS is set (internal services don't need CORS)
+_cors_origins = os.getenv("AGENT_CORS_ORIGINS", "")
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip() for o in _cors_origins.split(",") if o.strip()],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-app.include_router(chat_router, prefix="/api", tags=["chat"])
+app.include_router(
+    chat_router,
+    prefix="/api",
+    tags=["chat"],
+    dependencies=[Depends(verify_api_key), Depends(check_ip_allowlist)],
+)
 
 
 @app.get("/")
