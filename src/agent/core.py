@@ -53,6 +53,11 @@ def create_agent(config: AgentConfig | None = None):
     return agent, config
 
 
+def _last_user_content(messages: list[dict]) -> str:
+    """Extract content of the last user message for logging/tracing."""
+    return next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+
+
 def _build_langgraph_messages(
     message: str,
     messages: list[dict],
@@ -112,7 +117,7 @@ def run_query(
     # Unique thread_id per request — prevents MemorySaver state leakage
     internal_tid = str(uuid.uuid4())
 
-    with trace_run(langgraph_msgs[-1]["content"] if langgraph_msgs else "") as trace:
+    with trace_run(_last_user_content(langgraph_msgs)) as trace:
         result = agent.invoke(
             {"messages": langgraph_msgs},
             config=_build_config(internal_tid, config, handler, user_id, thread_id),
@@ -152,7 +157,7 @@ async def stream_query(
     langgraph_msgs = _build_langgraph_messages(message, messages or [])
     internal_tid = str(uuid.uuid4())
 
-    with trace_run(langgraph_msgs[-1]["content"] if langgraph_msgs else "") as trace:
+    with trace_run(_last_user_content(langgraph_msgs)) as trace:
         try:
             async for event in agent.astream_events(
                 {"messages": langgraph_msgs},

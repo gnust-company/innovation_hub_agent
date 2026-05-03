@@ -1,5 +1,5 @@
 """Pydantic schemas for the chat API."""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class UserMetadata(BaseModel):
@@ -19,6 +19,12 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(default_factory=list)
     thread_id: str = Field(default="")
     user_metadata: UserMetadata = Field(default_factory=UserMetadata)
+
+    @model_validator(mode="after")
+    def validate_has_content(self):
+        if not self.message and not self.messages:
+            raise ValueError("Either 'message' or 'messages' must be provided")
+        return self
 
 
 class ChatResponse(BaseModel):
