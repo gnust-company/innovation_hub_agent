@@ -11,7 +11,7 @@ services:
       - .env
     environment:
       - AGENT_ENV=production
-      - AGENT_API_KEY=${AGENT_API_KEY:-sk-agent-change-me}
+      - AGENT_API_KEY=${AGENT_API_KEY:?AGENT_API_KEY is required}
       - WIKI_PATH=/data/wiki
     ports:
       - "${AGENT_PORT:-8001}:8000"
@@ -27,5 +27,4 @@ services:
 
 networks:
   innovation_hub_network:
-    name: innovation_hub_innovation_hub_network
-    external: true
+    name: innovation_hub_network
