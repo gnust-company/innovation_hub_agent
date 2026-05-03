@@ -1,23 +1,44 @@
 """Structured logging for agent runs."""
 import json
 import logging
+import os
 import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 logger = logging.getLogger("innovation_hub_agent")
 
 
+class JsonFormatter(logging.Formatter):
+    """Emit one JSON object per log line — used in production."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        obj = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[1]:
+            obj["exception"] = self.formatException(record.exc_info)
+        return json.dumps(obj, ensure_ascii=False)
+
+
 def setup_logging(level: str = "INFO"):
-    """Configure structured logging."""
+    """Configure structured logging — JSON in production, text in development."""
     if logger.handlers:
         logger.setLevel(getattr(logging, level.upper(), logging.INFO))
         return
     handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    ))
+    env = os.getenv("AGENT_ENV", "development")
+    if env == "production":
+        handler.setFormatter(JsonFormatter())
+    else:
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+        ))
     logger.addHandler(handler)
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
 

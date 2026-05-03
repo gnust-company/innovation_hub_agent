@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  agent-be:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: innovation_hub_agent
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - AGENT_ENV=production
+      - AGENT_API_KEY=${AGENT_API_KEY:-sk-agent-change-me}
+      - WIKI_PATH=/data/wiki
+    ports:
+      - "${AGENT_PORT:-8001}:8000"
+    volumes:
+      - ../innovation_hub_wiki:/data/wiki:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - innovation_hub_network
+
+networks:
+  innovation_hub_network:
+    name: innovation_hub_innovation_hub_network
+    external: true

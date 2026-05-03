@@ -44,3 +44,4 @@ class HealthResponse(BaseModel):
     status: str
     wiki_path: str
     model: str
+    version: str = ""
