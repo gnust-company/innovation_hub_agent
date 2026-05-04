@@ -167,6 +167,20 @@ async def stream_query(
                 kind = event.get("event")
                 data = event.get("data", {})
 
+                # Debug: log ALL events to trace tool call flow
+                if kind == "on_chat_model_stream":
+                    chunk = data.get("chunk")
+                    has_tc = bool(getattr(chunk, "tool_calls", None))
+                    logger.info(f"[EVENT] {kind}: content_len={len(chunk.content) if chunk and hasattr(chunk, 'content') and chunk.content else 0}, tool_calls={has_tc}")
+                elif kind == "on_chat_model_end":
+                    msg = data.get("output")
+                    tc_list = getattr(msg, "tool_calls", None) if msg else None
+                    logger.info(f"[EVENT] {kind}: tool_calls={tc_list}, finish_reason={getattr(msg, 'response_metadata', {}).get('finish_reason') if msg else None}")
+                elif kind in ("on_tool_start", "on_tool_end"):
+                    logger.info(f"[EVENT] {kind}: name={event.get('name')}")
+                else:
+                    logger.debug(f"[EVENT] {kind}")
+
                 if kind == "on_chat_model_stream":
                     chunk = data.get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:

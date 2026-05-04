@@ -27,4 +27,5 @@ services:
 
 networks:
   innovation_hub_network:
+    external: true
     name: innovation_hub_network
