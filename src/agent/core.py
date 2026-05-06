@@ -14,25 +14,30 @@ from src.utils.logger import logger, setup_logging, trace_run
 
 TOOLS = [read_file, list_directory, search_wiki, resolve_wikilink]
 
+_setup_done = False
 
-def create_agent(config: AgentConfig | None = None):
-    """Create and return a ReAct agent with wiki tools."""
-    config = config or AgentConfig()
 
+def _ensure_setup():
+    """One-time setup (logging, wiki validation, system prompt)."""
+    global _setup_done
+    if _setup_done:
+        return
     setup_logging(os.getenv("LOG_LEVEL", "INFO"))
+    _setup_done = True
 
+
+def _load_prompt() -> str:
+    """Load system prompt from wiki (validates WIKI_PATH)."""
     wiki_path = os.getenv("WIKI_PATH")
     if not wiki_path:
         raise ValueError("WIKI_PATH environment variable is not set")
-    wiki = WikiFilesystem(wiki_path)
+    return load_system_prompt(WikiFilesystem(wiki_path))
 
-    system_prompt = load_system_prompt(wiki)
 
-    api_key = os.getenv("NVIDIA_API_KEY")
-    if not api_key:
-        raise ValueError("NVIDIA_API_KEY is required. Get one at build.nvidia.com")
-
-    llm = ChatOpenAI(
+def create_llm(api_key: str, config: AgentConfig | None = None) -> ChatOpenAI:
+    """Create a ChatOpenAI instance with the given API key."""
+    config = config or AgentConfig()
+    return ChatOpenAI(
         model=config.model_name,
         api_key=api_key,
         base_url=config.base_url,
@@ -41,16 +46,28 @@ def create_agent(config: AgentConfig | None = None):
         max_retries=config.llm_max_retries,
     )
 
-    # MemorySaver is for INTRA-REQUEST reasoning only (tool calling loops).
-    # It is NOT used for cross-request persistence — Hub BE owns all history.
+
+def create_agent_with_key(api_key: str, config: AgentConfig | None = None):
+    """Create a ReAct agent using a per-request LLM API key."""
+    config = config or AgentConfig()
+    _ensure_setup()
+
+    llm = create_llm(api_key, config)
     agent = create_react_agent(
         model=llm,
         tools=TOOLS,
-        prompt=system_prompt,
+        prompt=_load_prompt(),
         checkpointer=MemorySaver(),
     )
-
     return agent, config
+
+
+def create_agent(config: AgentConfig | None = None):
+    """Create a ReAct agent using NVIDIA_API_KEY from env (backward compat)."""
+    api_key = os.getenv("NVIDIA_API_KEY")
+    if not api_key:
+        raise ValueError("NVIDIA_API_KEY is required. Get one at build.nvidia.com")
+    return create_agent_with_key(api_key, config)
 
 
 def _last_user_content(messages: list[dict]) -> str:

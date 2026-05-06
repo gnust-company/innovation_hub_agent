@@ -20,23 +20,16 @@ def test_health_has_security_headers(app_client):
     assert resp.headers.get("x-xss-protection") == "1; mode=block"
 
 
-def test_ready_when_agent_not_initialized(app_client):
-    """/ready returns 503 when agent is None."""
-    resp = app_client.get("/ready")
-    assert resp.status_code == 503
-    data = resp.json()
-    assert data["status"] == "not ready"
-
-
-def test_ready_when_agent_initialized(app_client):
-    """/ready returns 200 when agent is initialized (simulated)."""
-    from unittest.mock import MagicMock
-    app_client.app.state.agent = MagicMock()
-
+def test_ready_when_config_initialized(app_client):
+    """/ready returns 200 when config is set and wiki path is valid."""
     resp = app_client.get("/ready")
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "ready"
 
-    # Cleanup
-    app_client.app.state.agent = None
+
+def test_ready_when_config_missing(app_client, monkeypatch):
+    """/ready returns 503 when config is not initialized."""
+    del app_client.app.state.config
+    resp = app_client.get("/ready")
+    assert resp.status_code == 503
