@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.agent.core import create_agent
+from src.agent.core import _ensure_setup, _load_prompt
 from src.agent.config import AgentConfig
 from src.api.deps import verify_api_key, check_ip_allowlist
 from src.api.routes.chat import router as chat_router
@@ -81,14 +81,15 @@ class RequestLoggingMiddleware:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize agent on startup — fail fast if misconfigured."""
+    """Initialize config on startup — agent is created per-request with user's API key."""
     api_key = os.getenv("AGENT_API_KEY")
     if not api_key:
         raise RuntimeError("AGENT_API_KEY is required — refusing to start unsecured")
 
+    _ensure_setup()
+    _load_prompt()  # validate WIKI_PATH early
+
     config = AgentConfig()
-    agent, config = create_agent(config)
-    app.state.agent = agent
     app.state.config = config
     logger.info(f"Agent started (model={config.model_name}, env={_AGENT_ENV})")
     yield
@@ -151,9 +152,9 @@ async def health():
 
 @app.get("/ready")
 async def ready():
-    """Readiness check — verifies agent is initialized and wiki is accessible."""
-    if not hasattr(app.state, "agent") or app.state.agent is None:
-        return JSONResponse(status_code=503, content={"status": "not ready", "error": "Agent not initialized"})
+    """Readiness check — verifies config and wiki are accessible."""
+    if not hasattr(app.state, "config") or app.state.config is None:
+        return JSONResponse(status_code=503, content={"status": "not ready", "error": "Config not initialized"})
 
     wiki_path = os.getenv("WIKI_PATH", "")
     if not wiki_path or not os.path.isdir(wiki_path):

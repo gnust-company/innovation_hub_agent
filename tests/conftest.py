@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 
 TEST_API_KEY = "test-agent-key-12345"
+TEST_LLM_KEY = "test-llm-key-fake"
 
 
 @pytest.fixture
@@ -28,15 +29,13 @@ def app_client(tmp_wiki, monkeypatch):
     monkeypatch.setenv("AGENT_ENV", "test")
 
     from src.api.app import app
-    # Simulate lifespan: set config manually (skip LLM init)
     from src.agent.config import AgentConfig
     app.state.config = AgentConfig()
-    app.state.agent = None  # No real agent in tests
 
     return TestClient(app)
 
 
 @pytest.fixture
 def auth_headers():
-    """Headers with valid API key."""
-    return {"X-API-Key": TEST_API_KEY}
+    """Headers with valid API key and LLM key."""
+    return {"X-API-Key": TEST_API_KEY, "X-LLM-API-Key": TEST_LLM_KEY}
