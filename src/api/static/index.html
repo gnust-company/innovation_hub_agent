@@ -100,6 +100,7 @@
 
 <div class="config-bar">
   <label>API Key: <input type="password" id="apiKey" placeholder="sk-agent-..."></label>
+  <label>LLM Key: <input type="password" id="llmKey" placeholder="nvapi-..."></label>
   <label>Thread ID: <input type="text" id="threadId" class="thread" placeholder="auto-generated"></label>
   <label>Username: <input type="text" id="username" value="test_user"></label>
   <label>Role: <input type="text" id="role" value="user"></label>
@@ -122,6 +123,7 @@ const threadInput = document.getElementById('threadId');
 const usernameInput = document.getElementById('username');
 const roleInput = document.getElementById('role');
 const apiKeyInput = document.getElementById('apiKey');
+const llmKeyInput = document.getElementById('llmKey');
 
 msgInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
 
@@ -246,6 +248,7 @@ async function sendMessage() {
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': apiKeyInput.value,
+        'X-LLM-API-Key': llmKeyInput.value,
       },
       body: JSON.stringify(body),
     });
