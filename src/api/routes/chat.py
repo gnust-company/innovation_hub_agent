@@ -121,6 +121,11 @@ async def chat_stream(
                             {"type": "error", "content": event["content"]},
                             ensure_ascii=False,
                         )}
+                    elif event["type"] == "limit_reached":
+                        yield {"data": json.dumps(
+                            {"type": "limit_reached"},
+                            ensure_ascii=False,
+                        )}
 
                 yield {"data": json.dumps({"type": "done"}, ensure_ascii=False)}
 

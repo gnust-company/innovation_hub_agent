@@ -307,6 +307,15 @@ async function sendMessage() {
           // finalize last segment as answer
         } else if (event.type === 'error') {
           createStep(turn, 'error').textContent = 'Error: ' + event.content;
+        } else if (event.type === 'limit_reached') {
+          currentSegment = 'Hmm, yêu cầu của bạn phức tạp hơn tôi tưởng 😔. Hiện tại tôi chưa thể giải quyết được, bạn thử lại sau nhé!';
+          if (!currentStep || currentStep.classList.contains('tool')) {
+            currentStep = createStep(turn, 'answer');
+          }
+          currentStep.className = 'step answer';
+          currentStep.innerHTML = renderMd(currentSegment);
+          currentSegment = '';
+          scrollBottom();
         }
       }
     }
