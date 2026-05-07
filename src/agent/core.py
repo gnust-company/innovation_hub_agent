@@ -214,6 +214,16 @@ async def stream_query(
                     content = output.content if hasattr(output, "content") else str(output)
                     yield {"type": "tool_result", "content": content, "run_id": event.get("run_id", "")}
 
+                elif kind == "on_chain_end":
+                    output = data.get("output", {})
+                    if isinstance(output, dict):
+                        messages = output.get("messages", [])
+                        if isinstance(messages, list) and messages:
+                            last = messages[-1]
+                            msg_content = getattr(last, "content", "")
+                            if "Sorry, need more steps" in str(msg_content):
+                                yield {"type": "limit_reached"}
+
             # Emit actual sources from files read during execution
             yield {"type": "sources", "files": trace.files_read}
 
