@@ -34,6 +34,7 @@ Agent BE **không persist state** giữa các requests. Hub BE gửi full `messa
 | `src/utils/logger.py` | Structured logging (JSON in production) |
 | `src/utils/wiki_fs.py` | WikiFilesystem — .md file operations |
 | `src/main.py` | CLI entry point |
+| `docs/AGENT_ARCHITECTURE.md` | Deep dive kiến trúc ReAct, streaming, memory model |
 
 ## Conventions
 

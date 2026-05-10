@@ -50,6 +50,13 @@ python -m src.main
 uvicorn src.api.app:app --reload
 ```
 
+## Tài liệu
+
+| File | Nội dung |
+|:-----|:---------|
+| `AGENTS.md` | Hướng dẫn cho AI coding assistants |
+| `docs/AGENT_ARCHITECTURE.md` | Deep dive kiến trúc ReAct, streaming, memory model |
+
 ## Giao diện
 
 ### CLI
@@ -81,6 +88,13 @@ uvicorn src.api.app:app --reload
 #### Streaming Events
 
 SSE stream phát các event type: `token`, `tool_call`, `tool_result`, `sources`, `done`, `error`.
+
+## Tài liệu
+
+| File | Nội dung |
+|:-----|:---------|
+| `AGENTS.md` | Hướng dẫn cho AI coding assistants |
+| `docs/AGENT_ARCHITECTURE.md` | Deep dive kiến trúc ReAct, streaming, memory model |
 
 ## Monitoring
 
@@ -171,6 +185,7 @@ tests/
 | `MODEL_NAME` | Tên model | `moonshotai/kimi-k2.5` |
 | `NVIDIA_BASE_URL` | API endpoint | `https://integrate.api.nvidia.com/v1` |
 | `MAX_TOOL_CALLS` | Giới hạn tool calls/query | `10` |
+| `MAX_DEPTH` | Giới hạn độ sâu follow wiki links | `3` |
 | `MAX_TOKENS` | Giới hạn tokens/response | `4096` |
 | `LLM_MAX_RETRIES` | Số lần retry khi LLM lỗi | `3` |
 | `TEMPERATURE` | LLM temperature | `0.0` |
