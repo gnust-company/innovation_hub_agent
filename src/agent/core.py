@@ -1,24 +1,28 @@
-"""Core ReAct agent setup using LangGraph — stateless, gateway-ready."""
+"""Core ReAct agent setup using LangGraph — tools loaded from MCP server."""
 import os
 import uuid
 
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from src.agent.config import AgentConfig
-from src.agent.prompts import load_system_prompt
-from src.agent.tools import read_file, list_directory, search_wiki, resolve_wikilink
-from src.utils.wiki_fs import WikiFilesystem
 from src.utils.logger import logger, setup_logging, trace_run
 
-TOOLS = [read_file, list_directory, search_wiki, resolve_wikilink]
+DEFAULT_SYSTEM_PROMPT = (
+    "Bạn là AI Agent của Innovation Hub. "
+    "Sử dụng các công cụ MCP để đọc wiki vault và trả lời câu hỏi chính xác."
+)
 
+_mcp_client: MultiServerMCPClient | None = None
+_mcp_tools: list = []
+_system_prompt: str = DEFAULT_SYSTEM_PROMPT
 _setup_done = False
 
 
 def _ensure_setup():
-    """One-time setup (logging, wiki validation, system prompt)."""
+    """One-time logging setup."""
     global _setup_done
     if _setup_done:
         return
@@ -26,12 +30,55 @@ def _ensure_setup():
     _setup_done = True
 
 
-def _load_prompt() -> str:
-    """Load system prompt from wiki (validates WIKI_PATH)."""
-    wiki_path = os.getenv("WIKI_PATH")
-    if not wiki_path:
-        raise ValueError("WIKI_PATH environment variable is not set")
-    return load_system_prompt(WikiFilesystem(wiki_path))
+async def init_mcp(config: AgentConfig):
+    """Connect to MCP server, load tools and system prompt."""
+    global _mcp_client, _mcp_tools, _system_prompt
+
+    mcp_url = config.mcp_url
+    logger.info("Connecting to MCP server at %s", mcp_url)
+
+    _mcp_client = MultiServerMCPClient(
+        {"innovation_hub": {"url": f"{mcp_url}/mcp"}}
+    )
+    await _mcp_client.__aenter__()
+    _mcp_tools = _mcp_client.get_tools()
+
+    tool_names = [t.name for t in _mcp_tools]
+    logger.info("Loaded %d tools from MCP: %s", len(_mcp_tools), tool_names)
+
+    # Try to load system prompt from MCP wiki resource
+    prompt = os.getenv("SYSTEM_PROMPT", "")
+    if prompt:
+        _system_prompt = prompt
+        logger.info("System prompt loaded from env var")
+    else:
+        try:
+            _system_prompt = await _fetch_system_prompt(_mcp_tools)
+            logger.info("System prompt loaded from MCP wiki")
+        except Exception as e:
+            logger.warning("Could not load system prompt from MCP: %s — using default", e)
+
+
+async def _fetch_system_prompt(tools: list) -> str:
+    """Load system prompt by calling wiki_read_file via MCP tool."""
+    for tool in tools:
+        if tool.name == "wiki_read_file":
+            content = await tool.ainvoke({"path": "00_Index/AGENT_GUIDE.md"})
+            if content and not content.startswith("Error:"):
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    content = parts[2].strip() if len(parts) >= 3 else content
+                return content
+    return DEFAULT_SYSTEM_PROMPT
+
+
+async def shutdown_mcp():
+    """Disconnect from MCP server."""
+    global _mcp_client
+    if _mcp_client:
+        await _mcp_client.__aexit__(None, None, None)
+        _mcp_client = None
+        logger.info("MCP client disconnected")
 
 
 def create_llm(api_key: str, config: AgentConfig | None = None) -> ChatOpenAI:
@@ -52,11 +99,14 @@ def create_agent_with_key(api_key: str, config: AgentConfig | None = None):
     config = config or AgentConfig()
     _ensure_setup()
 
+    if not _mcp_tools:
+        raise ValueError("MCP tools not loaded — is the MCP server running?")
+
     llm = create_llm(api_key, config)
     agent = create_react_agent(
         model=llm,
-        tools=TOOLS,
-        prompt=_load_prompt(),
+        tools=_mcp_tools,
+        prompt=_system_prompt,
         checkpointer=MemorySaver(),
     )
     return agent, config
@@ -101,11 +151,7 @@ def _build_config(
     user_id: str = "",
     session_id: str = "",
 ) -> dict:
-    """Build LangGraph invoke config.
-
-    Uses a unique thread_id per request so MemorySaver never loads stale state
-    from a previous request. The Hub BE's thread_id is passed to Langfuse only.
-    """
+    """Build LangGraph invoke config."""
     cfg = {
         "configurable": {"thread_id": thread_id},
         "recursion_limit": config.max_tool_calls,
@@ -131,7 +177,6 @@ def run_query(
 ) -> dict:
     """Run a single query with safety limits and structured logging."""
     langgraph_msgs = _build_langgraph_messages(message, messages or [])
-    # Unique thread_id per request — prevents MemorySaver state leakage
     internal_tid = str(uuid.uuid4())
 
     with trace_run(_last_user_content(langgraph_msgs)) as trace:
@@ -166,11 +211,7 @@ async def stream_query(
     handler=None,
     user_id: str = "",
 ):
-    """Stream agent execution with intermediate steps visible.
-
-    Yields events: thinking, tool_call, tool_result, sources, error.
-    The 'sources' event contains actual wiki files read during execution.
-    """
+    """Stream agent execution with intermediate steps visible."""
     langgraph_msgs = _build_langgraph_messages(message, messages or [])
     internal_tid = str(uuid.uuid4())
 
@@ -184,7 +225,6 @@ async def stream_query(
                 kind = event.get("event")
                 data = event.get("data", {})
 
-                # Debug: log ALL events to trace tool call flow
                 if kind == "on_chat_model_stream":
                     chunk = data.get("chunk")
                     has_tc = bool(getattr(chunk, "tool_calls", None))
@@ -224,7 +264,6 @@ async def stream_query(
                             if "Sorry, need more steps" in str(msg_content):
                                 yield {"type": "limit_reached"}
 
-            # Emit actual sources from files read during execution
             yield {"type": "sources", "files": trace.files_read}
 
         except Exception as e:

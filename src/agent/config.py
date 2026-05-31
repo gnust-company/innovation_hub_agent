@@ -25,3 +25,6 @@ class AgentConfig:
     model_name: str = field(default_factory=lambda: _env("MODEL_NAME", str, "moonshotai/kimi-k2.5"))
     base_url: str = field(default_factory=lambda: _env("NVIDIA_BASE_URL", str, "https://integrate.api.nvidia.com/v1"))
     temperature: float = field(default_factory=lambda: _env("TEMPERATURE", float, 0.0))
+
+    # MCP server
+    mcp_url: str = field(default_factory=lambda: _env("MCP_URL", str, "http://innovation_hub_mcp:9000"))

@@ -1,11 +1,9 @@
-"""Auth middleware tests — E.1."""
-import os
-
+"""Auth middleware tests."""
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.utils.logger import logger, setup_logging
+from src.utils.logger import setup_logging
 
 setup_logging("WARNING")
 
@@ -28,11 +26,9 @@ def test_wrong_api_key_rejected(app_client):
 
 def test_correct_api_key_passes_auth(app_client, auth_headers):
     """Request with correct API key passes auth — verify not 401."""
-    # Use /api/chat/stream — auth passes even though agent crashes (agent=None in tests)
     with app_client.stream(
         "POST", "/api/chat/stream", json={"message": "hello"}, headers=auth_headers,
     ) as resp:
-        # Should NOT be 401 or 422 — auth passed
         assert resp.status_code not in (401, 422)
 
 
@@ -48,11 +44,10 @@ def test_ready_no_auth_required(app_client):
     assert resp.status_code in (200, 503)
 
 
-def test_fail_fast_on_missing_api_key(monkeypatch, tmp_wiki):
+def test_fail_fast_on_missing_api_key(monkeypatch):
     """App startup crashes if AGENT_API_KEY is not set."""
     monkeypatch.delenv("AGENT_API_KEY", raising=False)
-    monkeypatch.setenv("WIKI_PATH", tmp_wiki)
-    monkeypatch.setenv("NVIDIA_API_KEY", "fake")
+    monkeypatch.setenv("MCP_URL", "http://localhost:9999")
 
     from src.api.app import lifespan
     test_app = FastAPI(lifespan=lifespan)

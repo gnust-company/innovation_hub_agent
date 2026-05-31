@@ -1,7 +1,4 @@
 """Shared test fixtures."""
-import os
-import tempfile
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -11,28 +8,25 @@ TEST_LLM_KEY = "test-llm-key-fake"
 
 
 @pytest.fixture
-def tmp_wiki(tmp_path):
-    """Create a minimal wiki vault for testing."""
-    index = tmp_path / "00_Index"
-    index.mkdir()
-    (index / "Welcome.md").write_text("# Welcome\nHello world [[Getting_Started]]")
-    (tmp_path / "Getting_Started.md").write_text("# Getting Started\nSome content")
-    return str(tmp_path)
-
-
-@pytest.fixture
-def app_client(tmp_wiki, monkeypatch):
+def app_client(monkeypatch):
     """FastAPI TestClient with mocked env vars — agent NOT initialized (no LLM key)."""
     monkeypatch.setenv("AGENT_API_KEY", TEST_API_KEY)
-    monkeypatch.setenv("WIKI_PATH", tmp_wiki)
+    monkeypatch.setenv("MCP_URL", "http://localhost:9999")
     monkeypatch.setenv("NVIDIA_API_KEY", "")
     monkeypatch.setenv("AGENT_ENV", "test")
 
     from src.api.app import app
     from src.agent.config import AgentConfig
+
     app.state.config = AgentConfig()
 
-    return TestClient(app)
+    # Mock MCP tools as loaded (so /ready passes)
+    import src.agent.core as core
+    core._mcp_tools = [type("FakeTool", (), {"name": "fake_tool"})()]
+
+    yield TestClient(app)
+
+    core._mcp_tools = []
 
 
 @pytest.fixture
