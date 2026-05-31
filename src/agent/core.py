@@ -38,10 +38,9 @@ async def init_mcp(config: AgentConfig):
     logger.info("Connecting to MCP server at %s", mcp_url)
 
     _mcp_client = MultiServerMCPClient(
-        {"innovation_hub": {"url": f"{mcp_url}/mcp"}}
+        {"innovation_hub": {"url": f"{mcp_url}/mcp", "transport": "http"}}
     )
-    await _mcp_client.__aenter__()
-    _mcp_tools = _mcp_client.get_tools()
+    _mcp_tools = await _mcp_client.get_tools()
 
     tool_names = [t.name for t in _mcp_tools]
     logger.info("Loaded %d tools from MCP: %s", len(_mcp_tools), tool_names)
@@ -63,7 +62,15 @@ async def _fetch_system_prompt(tools: list) -> str:
     """Load system prompt by calling wiki_read_file via MCP tool."""
     for tool in tools:
         if tool.name == "wiki_read_file":
-            content = await tool.ainvoke({"path": "00_Index/AGENT_GUIDE.md"})
+            result = await tool.ainvoke({"path": "00_Index/AGENT_GUIDE.md"})
+            # MCP tools return list of content blocks
+            if isinstance(result, list):
+                content = next(
+                    (b["text"] for b in result if isinstance(b, dict) and b.get("type") == "text"),
+                    "",
+                )
+            else:
+                content = str(result)
             if content and not content.startswith("Error:"):
                 if content.startswith("---"):
                     parts = content.split("---", 2)
@@ -76,7 +83,6 @@ async def shutdown_mcp():
     """Disconnect from MCP server."""
     global _mcp_client
     if _mcp_client:
-        await _mcp_client.__aexit__(None, None, None)
         _mcp_client = None
         logger.info("MCP client disconnected")
 
