@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.agent.core import _ensure_setup, _load_prompt
+from src.agent.core import _ensure_setup, init_mcp, shutdown_mcp
 from src.agent.config import AgentConfig
 from src.api.deps import verify_api_key, check_ip_allowlist
 from src.api.routes.chat import router as chat_router
@@ -81,18 +81,20 @@ class RequestLoggingMiddleware:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize config on startup — agent is created per-request with user's API key."""
+    """Initialize MCP connection and config on startup."""
     api_key = os.getenv("AGENT_API_KEY")
     if not api_key:
         raise RuntimeError("AGENT_API_KEY is required — refusing to start unsecured")
 
     _ensure_setup()
-    _load_prompt()  # validate WIKI_PATH early
-
     config = AgentConfig()
+
+    await init_mcp(config)
+
     app.state.config = config
     logger.info(f"Agent started (model={config.model_name}, env={_AGENT_ENV})")
     yield
+    await shutdown_mcp()
 
 
 _docs_url = None if _AGENT_ENV == "production" else "/docs"
@@ -144,7 +146,7 @@ async def health():
     config: AgentConfig = app.state.config
     return HealthResponse(
         status="ok",
-        wiki_path=os.getenv("WIKI_PATH", ""),
+        wiki_path="",
         model=config.model_name,
         version=_VERSION,
     )
@@ -152,12 +154,12 @@ async def health():
 
 @app.get("/ready")
 async def ready():
-    """Readiness check — verifies config and wiki are accessible."""
+    """Readiness check — verifies config and MCP tools are loaded."""
     if not hasattr(app.state, "config") or app.state.config is None:
         return JSONResponse(status_code=503, content={"status": "not ready", "error": "Config not initialized"})
 
-    wiki_path = os.getenv("WIKI_PATH", "")
-    if not wiki_path or not os.path.isdir(wiki_path):
-        return JSONResponse(status_code=503, content={"status": "not ready", "error": f"Wiki path invalid: {wiki_path}"})
+    from src.agent.core import _mcp_tools
+    if not _mcp_tools:
+        return JSONResponse(status_code=503, content={"status": "not ready", "error": "MCP tools not loaded"})
 
     return {"status": "ready"}
