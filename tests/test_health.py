@@ -35,9 +35,11 @@ def test_ready_when_config_missing(app_client, monkeypatch):
 
 
 def test_ready_when_mcp_not_loaded(app_client, monkeypatch):
-    """/ready returns 503 when MCP tools are not loaded."""
+    """/ready returns 200 degraded when MCP tools are not loaded."""
     import src.agent.core as core
     core._mcp_tools = []
     resp = app_client.get("/ready")
-    assert resp.status_code == 503
-    assert "MCP" in resp.json()["error"]
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "degraded"
+    assert "MCP" in data["warning"]

@@ -154,12 +154,15 @@ async def health():
 
 @app.get("/ready")
 async def ready():
-    """Readiness check — verifies config and MCP tools are loaded."""
+    """Readiness check — reports status including MCP availability."""
     if not hasattr(app.state, "config") or app.state.config is None:
         return JSONResponse(status_code=503, content={"status": "not ready", "error": "Config not initialized"})
 
     from src.agent.core import _mcp_tools
     if not _mcp_tools:
-        return JSONResponse(status_code=503, content={"status": "not ready", "error": "MCP tools not loaded"})
+        return JSONResponse(status_code=200, content={
+            "status": "degraded",
+            "warning": "MCP tools not loaded — wiki and BE features unavailable",
+        })
 
     return {"status": "ready"}

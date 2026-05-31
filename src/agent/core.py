@@ -4,20 +4,17 @@ import uuid
 
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
+from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from src.agent.config import AgentConfig
+from src.agent.prompts import load_system_prompt
 from src.utils.logger import logger, setup_logging, trace_run
-
-DEFAULT_SYSTEM_PROMPT = (
-    "Bạn là AI Agent của Innovation Hub. "
-    "Sử dụng các công cụ MCP để đọc wiki vault và trả lời câu hỏi chính xác."
-)
 
 _mcp_client: MultiServerMCPClient | None = None
 _mcp_tools: list = []
-_system_prompt: str = DEFAULT_SYSTEM_PROMPT
+_system_prompt: str = ""
 _setup_done = False
 
 
@@ -31,52 +28,24 @@ def _ensure_setup():
 
 
 async def init_mcp(config: AgentConfig):
-    """Connect to MCP server, load tools and system prompt."""
+    """Load system prompt from local file, then connect to MCP for tools."""
     global _mcp_client, _mcp_tools, _system_prompt
+
+    _system_prompt = load_system_prompt()
 
     mcp_url = config.mcp_url
     logger.info("Connecting to MCP server at %s", mcp_url)
 
-    _mcp_client = MultiServerMCPClient(
-        {"innovation_hub": {"url": f"{mcp_url}/mcp", "transport": "http"}}
-    )
-    _mcp_tools = await _mcp_client.get_tools()
-
-    tool_names = [t.name for t in _mcp_tools]
-    logger.info("Loaded %d tools from MCP: %s", len(_mcp_tools), tool_names)
-
-    # Try to load system prompt from MCP wiki resource
-    prompt = os.getenv("SYSTEM_PROMPT", "")
-    if prompt:
-        _system_prompt = prompt
-        logger.info("System prompt loaded from env var")
-    else:
-        try:
-            _system_prompt = await _fetch_system_prompt(_mcp_tools)
-            logger.info("System prompt loaded from MCP wiki")
-        except Exception as e:
-            logger.warning("Could not load system prompt from MCP: %s — using default", e)
-
-
-async def _fetch_system_prompt(tools: list) -> str:
-    """Load system prompt by calling wiki_read_file via MCP tool."""
-    for tool in tools:
-        if tool.name == "wiki_read_file":
-            result = await tool.ainvoke({"path": "00_Index/AGENT_GUIDE.md"})
-            # MCP tools return list of content blocks
-            if isinstance(result, list):
-                content = next(
-                    (b["text"] for b in result if isinstance(b, dict) and b.get("type") == "text"),
-                    "",
-                )
-            else:
-                content = str(result)
-            if content and not content.startswith("Error:"):
-                if content.startswith("---"):
-                    parts = content.split("---", 2)
-                    content = parts[2].strip() if len(parts) >= 3 else content
-                return content
-    return DEFAULT_SYSTEM_PROMPT
+    try:
+        _mcp_client = MultiServerMCPClient(
+            {"innovation_hub": {"url": f"{mcp_url}/mcp", "transport": "http"}}
+        )
+        _mcp_tools = await _mcp_client.get_tools()
+        tool_names = [t.name for t in _mcp_tools]
+        logger.info("Loaded %d tools from MCP: %s", len(_mcp_tools), tool_names)
+    except Exception as e:
+        logger.error("MCP connection failed: %s — agent starting without tools", e)
+        _mcp_tools = []
 
 
 async def shutdown_mcp():
@@ -106,12 +75,15 @@ def create_agent_with_key(api_key: str, config: AgentConfig | None = None):
     _ensure_setup()
 
     if not _mcp_tools:
-        raise ValueError("MCP tools not loaded — is the MCP server running?")
+        logger.warning("Creating agent without MCP tools — capabilities will be limited")
 
     llm = create_llm(api_key, config)
+    # Wrap tools in ToolNode with error handling — when MCP is down mid-request,
+    # tool errors are returned to the LLM so it can respond gracefully instead of crashing.
+    tool_node = ToolNode(_mcp_tools, handle_tool_errors=True) if _mcp_tools else []
     agent = create_react_agent(
         model=llm,
-        tools=_mcp_tools,
+        tools=tool_node,
         prompt=_system_prompt,
         checkpointer=MemorySaver(),
     )
@@ -239,8 +211,15 @@ async def stream_query(
                     msg = data.get("output")
                     tc_list = getattr(msg, "tool_calls", None) if msg else None
                     logger.info(f"[EVENT] {kind}: tool_calls={tc_list}, finish_reason={getattr(msg, 'response_metadata', {}).get('finish_reason') if msg else None}")
-                elif kind in ("on_tool_start", "on_tool_end"):
+                elif kind == "on_tool_start":
                     logger.info(f"[EVENT] {kind}: name={event.get('name')}")
+                elif kind == "on_tool_end":
+                    output = data.get("output", {})
+                    status = getattr(output, "status", None)
+                    if status == "error":
+                        logger.warning(f"[EVENT] on_tool_end ERROR: name={event.get('name')}")
+                    else:
+                        logger.info(f"[EVENT] on_tool_end: name={event.get('name')}")
                 else:
                     logger.debug(f"[EVENT] {kind}")
 
@@ -273,5 +252,10 @@ async def stream_query(
             yield {"type": "sources", "files": trace.files_read}
 
         except Exception as e:
-            logger.error(f"Stream error: {e}")
-            yield {"type": "error", "content": str(e)}
+            error_msg = str(e)
+            logger.error("Stream error: %s", error_msg)
+            # Check if this is a tool/MCP connectivity issue
+            if "TaskGroup" in error_msg or "Connection" in error_msg or "connect" in error_msg.lower():
+                yield {"type": "error", "content": "Hệ thống đang bảo trì, tôi chưa thể truy xuất thông tin chi tiết lúc này. Vui lòng thử lại sau."}
+            else:
+                yield {"type": "error", "content": error_msg}

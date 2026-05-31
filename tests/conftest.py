@@ -23,10 +23,12 @@ def app_client(monkeypatch):
     # Mock MCP tools as loaded (so /ready passes)
     import src.agent.core as core
     core._mcp_tools = [type("FakeTool", (), {"name": "fake_tool"})()]
+    core._system_prompt = "test system prompt"
 
     yield TestClient(app)
 
     core._mcp_tools = []
+    core._system_prompt = ""
 
 
 @pytest.fixture
