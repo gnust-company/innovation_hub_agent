@@ -49,11 +49,16 @@ async def init_mcp(config: AgentConfig):
 
 
 async def shutdown_mcp():
-    """Disconnect from MCP server."""
+    """Release MCP client reference.
+
+    MultiServerMCPClient is stateless — each tool call creates a new HTTP
+    session, so there is no persistent connection to close.  Setting to None
+    is sufficient to release the config reference.
+    """
     global _mcp_client
     if _mcp_client:
         _mcp_client = None
-        logger.info("MCP client disconnected")
+        logger.info("MCP client reference released")
 
 
 def create_llm(api_key: str, config: AgentConfig | None = None) -> ChatOpenAI:
