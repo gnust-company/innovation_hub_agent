@@ -93,6 +93,14 @@ async def lifespan(app: FastAPI):
 
     app.state.config = config
     logger.info(f"Agent started (model={config.model_name}, env={_AGENT_ENV})")
+
+    # Mount AG-UI endpoint after MCP init (graph needs tools)
+    try:
+        from src.api.routes.agui import mount_agui_endpoint
+        mount_agui_endpoint(app, prefix="/agui")
+    except Exception as e:
+        logger.warning("AG-UI endpoint not mounted: %s", e)
+
     yield
     await shutdown_mcp()
 

@@ -2,20 +2,31 @@
 import os
 import uuid
 
+from langchain_core.messages import SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, END
+from langgraph.graph.message import MessagesState
 from langgraph.prebuilt import create_react_agent
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from src.agent.config import AgentConfig
 from src.agent.prompts import load_system_prompt
 from src.utils.logger import logger, setup_logging, trace_run
 
+try:
+    from copilotkit import CopilotKitState
+except ImportError:
+    CopilotKitState = None
+
 _mcp_client: MultiServerMCPClient | None = None
 _mcp_tools: list = []
 _system_prompt: str = ""
 _setup_done = False
+_graph = None  # Compiled StateGraph for AG-UI (CopilotKit)
 
 
 def _ensure_setup():
@@ -29,7 +40,7 @@ def _ensure_setup():
 
 async def init_mcp(config: AgentConfig):
     """Load system prompt from local file, then connect to MCP for tools."""
-    global _mcp_client, _mcp_tools, _system_prompt
+    global _mcp_client, _mcp_tools, _system_prompt, _graph
 
     _system_prompt = load_system_prompt()
 
@@ -46,6 +57,8 @@ async def init_mcp(config: AgentConfig):
     except Exception as e:
         logger.error("MCP connection failed: %s — agent starting without tools", e)
         _mcp_tools = []
+
+    _graph = _build_agui_graph(config)
 
 
 async def shutdown_mcp():
@@ -74,6 +87,79 @@ def create_llm(api_key: str, config: AgentConfig | None = None) -> ChatOpenAI:
     )
 
 
+def _resolve_llm_key(config: RunnableConfig) -> str:
+    """Extract LLM API key from config — supports per-user keys via AG-UI forwardedProps."""
+    forwarded = config.get("configurable", {}).get("forwardedProps", {})
+    key = forwarded.get("llmApiKey", "") if isinstance(forwarded, dict) else ""
+    return key or os.getenv("NVIDIA_API_KEY", "")
+
+
+# --- AG-UI Graph (CopilotKit) ---
+
+class _AgentState(MessagesState if CopilotKitState is None else CopilotKitState):
+    """State for AG-UI graph — extends CopilotKitState when available."""
+    pass
+
+
+async def _agui_chat_node(state: _AgentState, config: RunnableConfig):
+    """Chat node for AG-UI — creates LLM per-request from config."""
+    agent_config = AgentConfig()
+    llm_key = _resolve_llm_key(config)
+    if not llm_key:
+        return Command(goto=END, update={"messages": []})
+
+    llm = create_llm(llm_key, agent_config)
+
+    # Bind CopilotKit frontend actions + MCP backend tools
+    fe_tools = []
+    if CopilotKitState is not None and hasattr(state, "get"):
+        fe_tools = state.get("copilotkit", {}).get("actions", [])
+    model_with_tools = llm.bind_tools([*fe_tools, *_mcp_tools])
+
+    system_msg = SystemMessage(content=_system_prompt)
+    response = await model_with_tools.ainvoke(
+        [system_msg, *state["messages"]], config
+    )
+
+    tool_calls = getattr(response, "tool_calls", None)
+    if tool_calls:
+        fe_tool_names = {a["name"] for a in fe_tools} if fe_tools else set()
+        has_backend_calls = any(tc["name"] not in fe_tool_names for tc in tool_calls)
+        if has_backend_calls:
+            return Command(goto="tool_node", update={"messages": [response]})
+    return Command(goto=END, update={"messages": [response]})
+
+
+def _should_route_to_tools(state):
+    """No-op router — handled by Command in chat_node."""
+    return END
+
+
+def _build_agui_graph(config: AgentConfig):
+    """Build compiled StateGraph for AG-UI (CopilotKit)."""
+    if not _mcp_tools:
+        logger.warning("Building AG-UI graph without MCP tools")
+
+    tool_node = ToolNode(_mcp_tools, handle_tool_errors=True) if _mcp_tools else ToolNode([])
+
+    graph = StateGraph(_AgentState)
+    graph.add_node("chat_node", _agui_chat_node)
+    graph.add_node("tool_node", tool_node)
+    graph.add_edge("tool_node", "chat_node")
+    graph.set_entry_point("chat_node")
+
+    return graph.compile(checkpointer=MemorySaver())
+
+
+def get_agui_graph():
+    """Return compiled AG-UI graph — raises if not initialized."""
+    if _graph is None:
+        raise RuntimeError("AG-UI graph not initialized — call init_mcp() first")
+    return _graph
+
+
+# --- Legacy agent creation (Hub BE proxy) ---
+
 def create_agent_with_key(api_key: str, config: AgentConfig | None = None):
     """Create a ReAct agent using a per-request LLM API key."""
     config = config or AgentConfig()
@@ -83,8 +169,6 @@ def create_agent_with_key(api_key: str, config: AgentConfig | None = None):
         logger.warning("Creating agent without MCP tools — capabilities will be limited")
 
     llm = create_llm(api_key, config)
-    # Wrap tools in ToolNode with error handling — when MCP is down mid-request,
-    # tool errors are returned to the LLM so it can respond gracefully instead of crashing.
     tool_node = ToolNode(_mcp_tools, handle_tool_errors=True) if _mcp_tools else []
     agent = create_react_agent(
         model=llm,
